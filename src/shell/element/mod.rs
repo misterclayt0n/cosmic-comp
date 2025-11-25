@@ -310,13 +310,10 @@ impl CosmicMapped {
     }
 
     pub fn set_tiled(&self, tiled: bool) {
-        if let Some(window) = match &self.element {
-            // we use the tiled state of stack windows anyway to get rid of decorations
-            CosmicMappedInternal::Stack(_) => None,
-            CosmicMappedInternal::Window(w) => Some(w.surface()),
+        match &self.element {
+            CosmicMappedInternal::Stack(s) => s.set_tiled(tiled),
+            CosmicMappedInternal::Window(w) => w.set_tiled(tiled),
             _ => unreachable!(),
-        } {
-            window.set_tiled(tiled)
         }
     }
 
@@ -1007,7 +1004,7 @@ impl From<CosmicStack> for CosmicMapped {
 
 pub enum CosmicMappedRenderElement<R>
 where
-    R: Renderer + ImportAll + ImportMem,
+    R: Renderer + AsGlowRenderer + ImportAll + ImportMem,
     R::TextureId: 'static,
 {
     Stack(self::stack::CosmicStackRenderElement<R>),
@@ -1042,7 +1039,7 @@ where
 
 impl<R> Element for CosmicMappedRenderElement<R>
 where
-    R: Renderer + ImportAll + ImportMem,
+    R: Renderer + AsGlowRenderer + ImportAll + ImportMem,
     R::TextureId: 'static,
 {
     fn id(&self) -> &smithay::backend::renderer::element::Id {

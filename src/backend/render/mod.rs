@@ -12,7 +12,14 @@ use std::{
 #[cfg(feature = "debug")]
 use crate::debug::fps_ui;
 use crate::{
-    backend::{kms::render::gles::GbmGlowBackend, render::element::DamageElement},
+    backend::{
+        kms::render::gles::GbmGlowBackend,
+        render::{
+            clipped_surface::{CLIPPING_SHADER, ClippingShader},
+            element::DamageElement,
+            shadow::{SHADOW_SHADER, ShadowShader},
+        },
+    },
     config::ScreenFilter,
     shell::{
         CosmicMappedRenderElement, OverviewMode, SeatExt, Trigger, WorkspaceDelta,
@@ -75,9 +82,10 @@ use smithay::{
 use smithay_egui::EguiState;
 
 pub mod animations;
-
+pub mod clipped_surface;
 pub mod cursor;
 pub mod element;
+pub mod shadow;
 use self::element::{AsGlowRenderer, CosmicElement};
 
 use super::kms::Timings;
@@ -128,6 +136,7 @@ pub enum Usage {
     FocusIndicator,
     PotentialGroupIndicator,
     SnappingIndicator,
+    Border,
 }
 
 #[derive(Clone)]
@@ -400,6 +409,15 @@ pub fn init_shaders(renderer: &mut GlesRenderer) -> Result<(), GlesError> {
             UniformName::new("color_mode", UniformType::_1f),
         ],
     )?;
+    let clipping_shader = renderer.compile_custom_texture_shader(
+        CLIPPING_SHADER,
+        &[
+            UniformName::new("geo_size", UniformType::_2f),
+            UniformName::new("corner_radius", UniformType::_4f),
+            UniformName::new("input_to_geo", UniformType::Matrix3x3),
+        ],
+    )?;
+    let shadow_shader = render.compile_custom_texture_shader(SHADOW_SHADER, &[])?;
 
     let egl_context = renderer.egl_context();
     egl_context
@@ -411,6 +429,9 @@ pub fn init_shaders(renderer: &mut GlesRenderer) -> Result<(), GlesError> {
     egl_context
         .user_data()
         .insert_if_missing(|| PostprocessShader(postprocess_shader));
+    egl_context
+        .user_data()
+        .insert_if_missing(|| ClippingShader(clipping_shader));
 
     Ok(())
 }

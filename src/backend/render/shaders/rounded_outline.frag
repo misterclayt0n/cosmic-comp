@@ -24,14 +24,14 @@ void main() {
     vec4 mix_color;
 
     float distance = rounded_box(location - center, (size / 2.0) - (thickness / 2.0), radius);
-    float smoothedAlpha = 1.0 - smoothstep(0.0, 1.0, abs(distance) - (thickness / 2.0));
-    
+    float smoothedAlpha = 1.0 - smoothstep(-0.5, 0.5, abs(distance) - (thickness / 2.0));
+
     mix_color = mix(vec4(0.0, 0.0, 0.0, 0.0), vec4(color, alpha), smoothedAlpha);
-    
-#if defined(DEBUG_FLAGS)
+
+    #if defined(DEBUG_FLAGS)
     if (tint == 1.0)
         mix_color = vec4(0.0, 0.3, 0.0, 0.2) + mix_color * 0.8;
-#endif
+    #endif
 
     gl_FragColor = mix_color;
 }

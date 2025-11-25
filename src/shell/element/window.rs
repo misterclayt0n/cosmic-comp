@@ -422,6 +422,10 @@ impl CosmicWindow {
             })
     }
 
+    pub fn set_tiled(&self, tiled: bool) {
+        self.0.with_program(|p| p.window.set_tiled(tiled));
+    }
+
     pub fn corner_radius(&self, geometry_size: Size<i32, Logical>) -> Option<[u8; 4]> {
         self.0
             .with_program(|p| p.window.corner_radius(geometry_size))
