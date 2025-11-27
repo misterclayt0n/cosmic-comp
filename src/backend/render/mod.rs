@@ -417,7 +417,19 @@ pub fn init_shaders(renderer: &mut GlesRenderer) -> Result<(), GlesError> {
             UniformName::new("input_to_geo", UniformType::Matrix3x3),
         ],
     )?;
-    let shadow_shader = render.compile_custom_texture_shader(SHADOW_SHADER, &[])?;
+    let shadow_shader = renderer.compile_custom_pixel_shader(
+        SHADOW_SHADER,
+        &[
+            UniformName::new("shadow_color", UniformType::_4f),
+            UniformName::new("sigma", UniformType::_1f),
+            UniformName::new("input_to_geo", UniformType::Matrix3x3),
+            UniformName::new("geo_size", UniformType::_2f),
+            UniformName::new("corner_radius", UniformType::_4f),
+            UniformName::new("window_input_to_geo", UniformType::Matrix3x3),
+            UniformName::new("window_geo_size", UniformType::_2f),
+            UniformName::new("window_corner_radius", UniformType::_4f),
+        ],
+    )?;
 
     let egl_context = renderer.egl_context();
     egl_context
@@ -432,6 +444,9 @@ pub fn init_shaders(renderer: &mut GlesRenderer) -> Result<(), GlesError> {
     egl_context
         .user_data()
         .insert_if_missing(|| ClippingShader(clipping_shader));
+    egl_context
+        .user_data()
+        .insert_if_missing(|| ShadowShader(shadow_shader));
 
     Ok(())
 }

@@ -161,6 +161,7 @@ impl PartialEq for CosmicMappedKey {
         }
     }
 }
+impl Eq for CosmicMappedKey {}
 
 impl PartialEq for CosmicMapped {
     fn eq(&self, other: &Self) -> bool {
