@@ -1,16 +1,20 @@
 use std::{borrow::Borrow, cell::RefCell, collections::HashMap};
 
+use cgmath::{Matrix3, Vector2};
 use smithay::{
     backend::renderer::{
         element::Kind,
-        gles::{GlesPixelProgram, GlesRenderer, Uniform, element::PixelShaderElement},
+        gles::{
+            GlesPixelProgram, GlesRenderer, Uniform, UniformValue, element::PixelShaderElement,
+        },
     },
-    utils::{IsAlive, Point, Rectangle, Size},
+    utils::{Coordinate, IsAlive, Point, Rectangle, Size},
 };
 
 use crate::{
-    backend::render::element::AsGlowRenderer, shell::element::CosmicMappedKey,
-    utils::prelude::Local,
+    backend::render::element::AsGlowRenderer,
+    shell::element::CosmicMappedKey,
+    utils::prelude::{Local, RectLocalExt},
 };
 
 pub static SHADOW_SHADER: &str = include_str!("./shaders/shadow.frag");
@@ -19,6 +23,7 @@ pub struct ShadowShader(pub GlesPixelProgram);
 #[derive(Debug, PartialEq)]
 pub struct ShadowParameters {
     geo: Rectangle<i32, Local>,
+    scale: f64,
     radius: [u8; 4],
 }
 type ShadowCache = RefCell<HashMap<CosmicMappedKey, (ShadowParameters, Vec<PixelShaderElement>)>>;
@@ -34,15 +39,22 @@ impl ShadowShader {
             .clone()
     }
 
-    pub fn shadow_elements<R: AsGlowRenderer>(
+    pub fn elements<R: AsGlowRenderer>(
         renderer: &R,
         key: CosmicMappedKey,
         geo: Rectangle<i32, Local>,
         radius: [u8; 4],
+        alpha: f32,
         scale: f64,
-        alpha: f64,
-    ) -> impl Iterator<Item = PixelShaderElement> {
-        let params = ShadowParameters { geo, radius };
+    ) -> impl Iterator<Item = PixelShaderElement> + use<R> {
+        let params = ShadowParameters { geo, scale, radius };
+        let ceil = |logical: f64| (logical * scale).ceil() / scale;
+
+        let mut geo = geo.to_f64();
+        geo.loc.x = ceil(geo.loc.x);
+        geo.loc.y = ceil(geo.loc.y);
+        geo.size.w = ceil(geo.size.w);
+        geo.size.h = ceil(geo.size.h);
 
         let user_data = Borrow::<GlesRenderer>::borrow(renderer.glow_renderer())
             .egl_context()
@@ -58,12 +70,12 @@ impl ShadowShader {
             .is_none()
         {
             let shader = Self::get(renderer);
-            let ceil = |logical: f64| (logical * scale).ceil() / scale;
 
             let softness = 30.;
-            let spread: f64 = 5.;
+            let spread = 5.;
             let offset = [0., 5.];
             let color = [0., 0., 0., 0.45];
+            let radius = radius.map(|r| ceil(r as f64));
 
             let width = softness;
             let sigma = width / 2.;
@@ -74,81 +86,90 @@ impl ShadowShader {
             let offset = offset - Point::new(spread, spread);
 
             let box_size = if spread >= 0. {
-                geo + Size::new(spread, spread).upscale(2.)
+                geo.size + Size::new(spread, spread).upscale(2.)
             } else {
-                geo - Size::new(-spread, -spread).upscale(2.)
+                geo.size - Size::new(-spread, -spread).upscale(2.)
             };
 
             let win_radius = radius;
-            let radius = radius.map(|r| {
-                if r > 0 {
-                    r.saturating_add_signed(spread.round() as i8)
-                } else {
-                    0
-                }
-            });
+            let radius = radius.map(|r| if r > 0. { r.saturating_add(spread) } else { 0. });
             let shader_size = box_size + Size::from((width, width)).upscale(2.);
-            let shader_geo = Rectangle::new(Point::from((-width, -width)), shader_size);
+            let mut shader_geo = Rectangle::new(Point::from((-width, -width)), shader_size);
 
-            // This is actually offset relative to shader_geo, this is handled below.
-            let window_geo = Rectangle::new(Point::from((0., 0.)), geo);
+            let window_geo = Rectangle::new(Point::new(0., 0.) - offset - shader_geo.loc, geo.size);
+            let area_size = Vector2::new(shader_geo.size.w, shader_geo.size.h);
+            let geo_loc = Vector2::new(-shader_geo.loc.x, -shader_geo.loc.y);
+            shader_geo.loc += offset + geo.loc;
 
-            let top_left = ceil(f64::from(radius[0]));
-            let top_right = f64::min(geo.w - top_left, ceil(f64::from(radius[1])));
-            let bottom_left = f64::min(geo.h - top_left, ceil(f64::from(radius[2])));
-            let bottom_right = f64::min(
-                geo.h - top_right,
-                f64::min(geo.w - bottom_left, ceil(f64::from(radius[3]))),
-            );
+            let input_to_geo = (Matrix3::from_nonuniform_scale(area_size.x, area_size.y)
+                * Matrix3::from_translation(Vector2::new(
+                    -geo_loc.x / area_size.x,
+                    -geo_loc.y / area_size.y,
+                )))
+            .cast::<f32>()
+            .unwrap();
 
-            let top_left = Rectangle::new(Point::from((0., 0.)), Size::from((top_left, top_left)));
-            let top_right = Rectangle::new(
-                Point::from((geo.w - top_right, 0.)),
-                Size::from((top_right, top_right)),
-            );
-            let bottom_right = Rectangle::new(
-                Point::from((geo.w - bottom_right, geo.h - bottom_right)),
-                Size::from((bottom_right, bottom_right)),
-            );
-            let bottom_left = Rectangle::new(
-                Point::from((0., geo.h - bottom_left)),
-                Size::from((bottom_left, bottom_left)),
-            );
+            let window_geo_loc = Vector2::new(window_geo.loc.x as f64, window_geo.loc.y as f64);
+            let window_input_to_geo = (Matrix3::from_nonuniform_scale(area_size.x, area_size.y)
+                * Matrix3::from_translation(Vector2::new(
+                    -window_geo_loc.x / area_size.x,
+                    -window_geo_loc.y / area_size.y,
+                )))
+            .cast::<f32>()
+            .unwrap();
 
-            let mut background =
-                window_geo.subtract_rects([top_left, top_right, bottom_right, bottom_left]);
-            for rect in &mut background {
-                rect.loc -= offset;
-            }
+            let elements = vec![PixelShaderElement::new(
+                shader,
+                shader_geo.to_i32_up().as_logical(),
+                None,
+                alpha,
+                vec![
+                    Uniform::new("shadow_color", color),
+                    Uniform::new("sigma", sigma as f32),
+                    Uniform::new(
+                        "input_to_geo",
+                        UniformValue::Matrix3x3 {
+                            matrices: vec![*AsRef::<[f32; 9]>::as_ref(&input_to_geo)],
+                            transpose: false,
+                        },
+                    ),
+                    Uniform::new("geo_size", [box_size.w as f32, box_size.h as f32]),
+                    Uniform::new(
+                        "corner_radius",
+                        [
+                            radius[0] as f32,
+                            radius[1] as f32,
+                            radius[2] as f32,
+                            radius[3] as f32,
+                        ],
+                    ),
+                    Uniform::new(
+                        "window_input_to_geo",
+                        UniformValue::Matrix3x3 {
+                            matrices: vec![*AsRef::<[f32; 9]>::as_ref(&window_input_to_geo)],
+                            transpose: false,
+                        },
+                    ),
+                    Uniform::new(
+                        "window_geo_size",
+                        [window_geo.size.w as f32, window_geo.size.h as f32],
+                    ),
+                    Uniform::new(
+                        "window_corner_radius",
+                        [
+                            win_radius[0] as f32,
+                            win_radius[1] as f32,
+                            win_radius[2] as f32,
+                            win_radius[3] as f32,
+                        ],
+                    ),
+                ],
+                Kind::Unspecified,
+            )];
 
-            let elements = Vec::with_capacity(4);
-            for mut rect in shader_geo.subtract_rects(background) {
-                let window_geo =
-                    Rectangle::new(window_geo.loc - offset - rect.loc, window_geo.size);
-                rect.loc += offset;
-
-                elements.push(PixelShaderElement::new(
-                    shader,
-                    rect,
-                    None,
-                    alpha,
-                    vec![
-                        Uniform::new("shadow_color", color),
-                        Uniform::new("sigma", sigma),
-                        mat3_uniform("input_to_geo", input_to_geo),
-                        Uniform::new("geo_size", [box_size.w, box_size.h]),
-                        Uniform::new("corner_radius", <[f32; 4]>::from(radius)),
-                        mat3_uniform("window_input_to_geo", window_input_to_geo),
-                        Uniform::new("window_geo_size", [window_geo.size.w, window_geo.size.h]),
-                        Uniform::new("window_corner_radius", <[f32; 4]>::from(win_radius)),
-                    ],
-                    Kind::Unspecified,
-                ))
-            }
-
-            cache.insert(key, (params, elements));
+            cache.insert(key.clone(), (params, elements));
         }
 
-        cache.get(&key).unwrap()[1].iter().cloned()
+        cache.get(&key).unwrap().1.clone().into_iter()
     }
 }

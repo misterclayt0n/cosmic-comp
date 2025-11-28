@@ -8,6 +8,7 @@ use crate::{
         clipped_surface::ClippedSurfaceRenderElement,
         cursor::CursorState,
         element::{AsGlowRenderer, FromGlesError},
+        shadow::ShadowShader,
     },
     hooks::{Decorations, HOOKS},
     shell::{
@@ -698,25 +699,35 @@ impl CosmicStack {
             geo.loc += location.to_f64().to_logical(scale);
             geo.size.h += TAB_HEIGHT as f64;
 
+            let window_key =
+                CosmicMappedKey(CosmicMappedKeyInner::Stack(Arc::downgrade(&self.0.0)));
+
             let border = (!p.tiled.load(Ordering::Acquire))
                 .then(|| {
                     let (r, g, b, a) = theme.cosmic().bg_divider().into_components();
                     IndicatorShader::element(
                         renderer,
-                        Key::Window(
-                            Usage::Border,
-                            CosmicMappedKey(CosmicMappedKeyInner::Stack(Arc::downgrade(&self.0.0))),
-                        ),
+                        Key::Window(Usage::Border, window_key.clone()),
                         geo.to_i32_round().as_local(),
                         1,
                         radii.unwrap_or([0, 0, 0, 0]),
-                        a,
+                        a * alpha,
                         [r, g, b],
                     )
                 })
                 .map(CosmicStackRenderElement::Border);
 
-            border.into_iter().chain(
+            let shadows = ShadowShader::elements(
+                renderer,
+                window_key,
+                geo.to_i32_round().as_local(),
+                radii.unwrap_or([0, 0, 0, 0]),
+                alpha,
+                scale.x,
+            )
+            .map(CosmicStackRenderElement::Border);
+
+            border.into_iter().chain(shadows).chain(
                 windows[active]
                     .render_elements::<R, WaylandSurfaceRenderElement<R>>(
                         renderer,
